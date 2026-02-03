@@ -184,9 +184,9 @@ const FluidBlob = () => {
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
-      uSpeed: { value: 0.3 },      // Slowed down for "viscous" liquid feel
-      uDistortion: { value: 0.4 }, // Reduced to maintain sphere shape
-      uFrequency: { value: 1.0 },  // Lower frequency = larger, smoother blobs
+      uSpeed: { value: 0.2 },      // Slowed down for "viscous" liquid feel
+      uDistortion: { value: 0.05 }, // Reduced to maintain sphere shape
+      uFrequency: { value: 3.0 },  // Lower frequency = larger, smoother blobs
       uColorA: { value: new THREE.Color("#ff0077") },
       uColorB: { value: new THREE.Color("#0055ff") },
     }),

@@ -6,7 +6,7 @@ import { OrbitControls } from "@react-three/drei";
 const CanvasSetupWAC = () => {
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#050505" }}>
-      <Canvas camera={{ position: [0, 0, 5] }}>
+      <Canvas camera={{ position: [0, 0, 3] }}>
         <FluidBlob />
         <OrbitControls />
       </Canvas>
