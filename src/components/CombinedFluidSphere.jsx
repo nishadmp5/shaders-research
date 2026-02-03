@@ -8,7 +8,7 @@ const DistortedFluidMaterial = shaderMaterial(
   {
     uTime: 0,
     uSpeed: 0.2,
-    uDistortion: 0.01,
+    uDistortion: 0.0,
     uFrequency: 3.0,
     uIntensity: 1.0,
     
@@ -19,14 +19,16 @@ const DistortedFluidMaterial = shaderMaterial(
     uMinWidth: 0.1,
     uMaxWidth: 1.0,
     
-    // --- NEW: FRESNEL (EDGE) UNIFORMS ---
-    uFresnelPower: 2.0, // Controls how much it pushes to the edge
+    // --- NEW BACKLIGHT UNIFORMS ---
+    uRimPower: 2.0,       // Sharpness of the edge light
+    uRimStrength: 1.0,    // Brightness of the light source behind
+    uInnerDarkness: 0.8,  // How much the center blocks light (0 = Clear, 1 = Black Silhouette)
     
     uColorA: new THREE.Color("#E048D7"),
     uColorB: new THREE.Color("#5FCCFE"),
     uColorC: new THREE.Color("#521554"),
   },
-  // --- VERTEX SHADER ---
+  // --- VERTEX SHADER (Unchanged) ---
   `
     uniform float uTime;
     uniform float uDistortion;
@@ -35,11 +37,10 @@ const DistortedFluidMaterial = shaderMaterial(
 
     varying vec2 vUv;
     varying float vNoise;
-    varying vec3 vViewNormal;    // Normal in View Space
-    varying vec3 vViewPosition;  // Position in View Space
+    varying vec3 vViewNormal;
+    varying vec3 vViewPosition;
 
-    // ... (Simplex Noise Functions Omitted for brevity, same as before) ...
-    // Standard Simplex Noise
+    // (Simplex Noise Functions hidden for brevity)
     vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
@@ -93,19 +94,13 @@ const DistortedFluidMaterial = shaderMaterial(
 
     void main() {
         vUv = uv;
-        
-        // 1. Calculate View Space Normal (Essential for Fresnel)
         vViewNormal = normalize(normalMatrix * normal);
-        
-        // 2. Calculate View Position (To know where camera is looking)
         vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
         vViewPosition = -mvPosition.xyz;
 
-        // 3. Noise & Distortion
         float noise = snoise(vec3(position * uFrequency + uTime * uSpeed));
         vNoise = noise;
         vec3 deformedPos = position + (normal * noise * uDistortion);
-        
         gl_Position = projectionMatrix * modelViewMatrix * vec4(deformedPos, 1.0);
     }
   `,
@@ -123,17 +118,17 @@ const DistortedFluidMaterial = shaderMaterial(
     uniform float uMinWidth;
     uniform float uMaxWidth;
     
-    // NEW UNIFORM
-    uniform float uFresnelPower;
+    // Updated Backlight Uniforms
+    uniform float uRimPower;
+    uniform float uRimStrength;
+    uniform float uInnerDarkness;
     
     varying vec2 vUv;
     varying float vNoise;
     varying vec3 vViewNormal;
     varying vec3 vViewPosition;
 
-    float random (in vec2 st) {
-        return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
-    }
+    float random (in vec2 st) { return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123); }
     float noise (in vec2 st) {
         vec2 i = floor(st);
         vec2 f = fract(st);
@@ -158,7 +153,7 @@ const DistortedFluidMaterial = shaderMaterial(
     void main() {
         vec2 uv = vUv * uNoiseDensity;
         
-        // --- NOISE GENERATION ---
+        // --- FLUID PATTERN ---
         vec2 q = vec2(0.);
         q.x = fbm(uv + 0.1 * uTime);
         q.y = fbm(uv + vec2(1.0));
@@ -169,7 +164,7 @@ const DistortedFluidMaterial = shaderMaterial(
 
         float f = fbm(uv + r);
 
-        // --- COLOR MIXING ---
+        // --- FLUID COLORS ---
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
         
@@ -178,28 +173,34 @@ const DistortedFluidMaterial = shaderMaterial(
         float sharpness = 1.0 / max(currentWidth, 0.001);
 
         float glowIntensity = pow(f, sharpness) * 4.0;
-        vec3 coloredGlow = uColorA * glowIntensity;
+        vec3 fluidGlow = uColorA * glowIntensity;
         
-        vec3 finalColor = (color * uIntensity) + coloredGlow;
+        vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
 
-        // --- NEW: FRESNEL (EDGE FOCUS) LOGIC ---
-        // 1. Normalize vectors
+        // --- BACKLIGHTING LOGIC ---
+        
+        // 1. Calculate Fresnel (View Angle)
         vec3 viewDir = normalize(vViewPosition);
         vec3 normal = normalize(vViewNormal);
+        // Fresnel: 0.0 at center, 1.0 at edge
+        float fresnel = 1.0 - dot(viewDir, normal); 
         
-        // 2. Calculate Dot Product (1.0 = center, 0.0 = edge)
-        // We subtract from 1.0 to reverse it (0.0 = center, 1.0 = edge)
-        float fresnel = 1.0 - dot(viewDir, normal);
-        
-        // 3. Sharpen the edge using Power
-        float edgeEffect = pow(fresnel, uFresnelPower);
-        
-        // 4. Apply to final color
-        // This will make the center black and the edges colorful
-        finalColor *= edgeEffect;
+        // 2. Inner Blocking (Shadow)
+        // We darken the fluid pattern in the center to look like it's blocking light
+        // uInnerDarkness of 1.0 means center is black. 0.0 means no shadow.
+        // We invert fresnel for the shadow map (1.0 at center)
+        float shadowMap = 1.0 - (fresnel * uInnerDarkness); 
+        // Clamp to prevent negative colors
+        finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
 
-        gl_FragColor = vec4(finalColor, 1.0);
+        // 3. Rim Light (The Light Source Behind)
+        // This is ADDED on top, creating the bright halo
+        float rimParam = pow(fresnel, uRimPower);
+        // We tint the rim with Color A to match the theme, or use white for pure light
+        vec3 rimColor = mix(vec3(1.0), uColorA, 0.5) * rimParam * uRimStrength;
+        
+        gl_FragColor = vec4(finalColor + rimColor, 1.0);
     }
   `
 );
@@ -212,7 +213,7 @@ const DistortedFluidSphere = (props) => {
   const { 
     minWidth, maxWidth, 
     noiseDensity, warpStrength, contrast, intensity, 
-    fresnelPower, // New Control
+    rimPower, rimStrength, innerDarkness,
     colorA, colorB, colorC 
   } = useControls("Distorted Fluid", {
     minWidth: { value: 0.1, min: 0.01, max: 2.0 },
@@ -221,8 +222,12 @@ const DistortedFluidSphere = (props) => {
     warpStrength: { value: 4.0, min: 0.0, max: 5.0 },
     contrast: { value: 0.0, min: 0.0, max: 1.0 },
     intensity: { value: 3, min: 0.0, max: 5.0 },
-    // Controls how "Hollow" the center looks
-    fresnelPower: { value: 0.9, min: 0.5, max: 10.0, label: "Edge Focus" }, 
+    
+    // New Backlight Controls
+    rimPower: { value: 6.0, min: 0.5, max: 8.0, label: "Backlight Edge Sharpness" },
+    rimStrength: { value: 1.0, min: 0.0, max: 5.0, label: "Backlight Brightness" },
+    innerDarkness: { value: 0.9, min: 0.0, max: 1.0, label: "Blocking Opacity" },
+    
     colorA: "#e048d7",
     colorB: "#2a7ed5",
     colorC: "#000000",
@@ -244,7 +249,11 @@ const DistortedFluidSphere = (props) => {
         uWarpStrength={warpStrength}
         uContrast={contrast}
         uIntensity={intensity}
-        uFresnelPower={fresnelPower} // Pass uniform
+        // New Props
+        uRimPower={rimPower}
+        uRimStrength={rimStrength}
+        uInnerDarkness={innerDarkness}
+        // Colors
         uColorA={new THREE.Color(colorA)}
         uColorB={new THREE.Color(colorB)}
         uColorC={new THREE.Color(colorC)}
