@@ -1,9 +1,9 @@
 import { Sphere, shaderMaterial } from "@react-three/drei";
 import { extend, useFrame } from "@react-three/fiber";
-import { useRef } from "react";
+import React, { useRef, useMemo } from "react";
 import * as THREE from "three";
-import { useControls } from "leva";
 
+// 1. Define shader outside component to avoid recompilation
 const DistortedFluidMaterial = shaderMaterial(
   {
     uTime: 0,
@@ -18,26 +18,25 @@ const DistortedFluidMaterial = shaderMaterial(
     uContrast: 0.5,
     uMinWidth: 0.1,
     uMaxWidth: 1.0,
-    
-    // --- NEW: VEIN CONTROL ---
-    uVeinDefinition: 0.6, // Controls how wide/sharp the black veins are
+    uVeinDefinition: 0.6, 
 
-    // --- BACKLIGHT UNIFORMS ---
+    // Backlight Uniforms
     uRimPower: 8.0,       
     uRimStrength: 1.25,    
     uInnerDarkness: 0.8,  
     uRimColor: new THREE.Color("#8AAFFF"), 
     
-    // --- WANDERING FRESNEL ---
+    // Wandering Fresnel
     uRimWanderSpeed: 1.5,
     uRimWanderJitter: 0.3,
     
+    // Color Uniforms
     uColorA: new THREE.Color("#E048D7"),
     uColorB: new THREE.Color("#5FCCFE"),
     uColorC: new THREE.Color("#521554"),
-    uColorD: new THREE.Color("#000000"), // Black
+    uColorD: new THREE.Color("#000000"), 
   },
-  // --- VERTEX SHADER (Unchanged) ---
+  // Vertex Shader
   `
     uniform float uTime;
     uniform float uDistortion;
@@ -49,6 +48,7 @@ const DistortedFluidMaterial = shaderMaterial(
     varying vec3 vViewNormal;
     varying vec3 vViewPosition;
 
+    // Ashima Simplex Noise (Optimized for GLSL)
     vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
@@ -112,7 +112,7 @@ const DistortedFluidMaterial = shaderMaterial(
         gl_Position = projectionMatrix * modelViewMatrix * vec4(deformedPos, 1.0);
     }
   `,
-  // --- FRAGMENT SHADER (Updated) ---
+  // Fragment Shader
   `
     uniform float uTime;
     uniform float uSpeed;
@@ -127,15 +127,13 @@ const DistortedFluidMaterial = shaderMaterial(
     uniform float uContrast;
     uniform float uMinWidth;
     uniform float uMaxWidth;
-    uniform float uVeinDefinition; // <--- New Uniform
+    uniform float uVeinDefinition;
     
-    // Backlight Uniforms
     uniform float uRimPower;
     uniform float uRimStrength;
     uniform float uInnerDarkness;
     uniform vec3 uRimColor;
     
-    // Wander Uniforms
     uniform float uRimWanderSpeed;
     uniform float uRimWanderJitter;
     
@@ -170,7 +168,7 @@ const DistortedFluidMaterial = shaderMaterial(
         vec2 uv = vUv * uNoiseDensity;
         float moveTime = uTime * uSpeed; 
 
-        // --- FLUID PATTERN ---
+        // Fluid Pattern
         vec2 q = vec2(0.);
         q.x = fbm(uv + 0.5 * moveTime); 
         q.y = fbm(uv + vec2(1.0));
@@ -181,18 +179,14 @@ const DistortedFluidMaterial = shaderMaterial(
 
         float f = fbm(uv + r);
 
-        // --- FLUID COLORS ---
+        // Fluid Colors
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
         
-        // --- CONTROLLED BLACK VEINS ---
-        // uVeinDefinition controls the edge of the smoothstep.
-        // Higher values = narrower veins. Lower values = wider veins.
+        // Controlled Black Veins
         float blackVeins = smoothstep(0.0, uVeinDefinition, abs(f - 0.5) * 3.0);
-        
-        // Apply the black veins
         color = mix(color, uColorD, blackVeins);
 
-        // Mix in deep background color
+        // Deep background color
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
         
         float widthMap = smoothstep(0.0, 1.5, length(q)); 
@@ -205,7 +199,7 @@ const DistortedFluidMaterial = shaderMaterial(
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
 
-        // --- BACKLIGHTING LOGIC ---
+        // Backlighting Logic
         vec3 viewDir = normalize(vViewPosition);
         
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
@@ -227,42 +221,18 @@ const DistortedFluidMaterial = shaderMaterial(
 
 extend({ DistortedFluidMaterial });
 
-const DistortedFluidSphere = (props) => {
+// 2. Wrap in React.memo for performance in large component trees
+const DistortedFluidSphere = React.memo((props) => {
   const materialRef = useRef();
 
-  const { 
-    minWidth, maxWidth, 
-    noiseDensity, warpStrength, contrast, intensity, 
-    veinDefinition, // <--- Destructure new control
-    rimPower, rimStrength, innerDarkness, rimColor,
-    colorA, colorB, colorC, colorD,
-    speed,
-    rimWanderSpeed, rimWanderJitter 
-  } = useControls("Distorted Fluid", {
-    minWidth: { value: 0.1, min: 0.01, max: 2.0 },
-    maxWidth: { value: 0.5, min: 0.01, max: 2.0 },
-    noiseDensity: { value: 5.0, min: 0.1, max: 5.0 },
-    warpStrength: { value: 4.0, min: 0.0, max: 5.0 },
-    contrast: { value: 0.5, min: 0.0, max: 1.0 },
-    intensity: { value: 3, min: 0.0, max: 5.0 },
-    speed: { value: 0.7, min: 0.0, max: 2.0, label: "Flow Speed" },
-    
-    // New Vein Control
-    veinDefinition: { value: 0.75, min: 0.1, max: 3.0, label: "Black Vein Spread" },
-    
-    rimPower: { value: 8.0, min: 0.5, max: 8.0, label: "Backlight Edge Sharpness" },
-    rimStrength: { value: 1.25, min: 0.0, max: 5.0, label: "Backlight Brightness" },
-    innerDarkness: { value: 0.9, min: 0.0, max: 1.0, label: "Blocking Opacity" },
-    rimColor: { value: "#8AAFFF", label: "Backlight Color" },
-    
-    rimWanderSpeed: { value: 1.5, min: 0.1, max: 3.0, label: "Wander Speed" },
-    rimWanderJitter: { value: 0.3, min: 0.0, max: 1.0, label: "Wander Distance" },
-    
-    colorA: "#e048d7",
-    colorB: "#2a7ed5",
-    colorC: "#521554", 
-    colorD: "#000000",
-  });
+  // 3. Memoize color instances to prevent garbage collection churn on every render
+  const uniforms = useMemo(() => ({
+    rimColor: new THREE.Color("#8AAFFF"),
+    colorA: new THREE.Color("#e048d7"),
+    colorB: new THREE.Color("#2a7ed5"),
+    colorC: new THREE.Color("#521554"),
+    colorD: new THREE.Color("#000000"),
+  }), []);
 
   useFrame(({ clock }) => {
     if (materialRef.current) {
@@ -272,35 +242,37 @@ const DistortedFluidSphere = (props) => {
 
   return (
     <Sphere args={[1.5, 128, 128]}>
+      {/* 4. Pass stable references. R3F will now strictly update uniforms only if they change */}
       <distortedFluidMaterial 
         ref={materialRef} 
-        uMinWidth={minWidth}
-        uMaxWidth={maxWidth}
-        uNoiseDensity={noiseDensity}
-        uWarpStrength={warpStrength}
-        uContrast={contrast}
-        uIntensity={intensity}
-        uSpeed={speed}
         
-        // Pass the new uniform
-        uVeinDefinition={veinDefinition}
+        // Uniforms
+        uMinWidth={0.1}
+        uMaxWidth={0.5}
+        uNoiseDensity={5.0}
+        uWarpStrength={4.0}
+        uContrast={0.5}
+        uIntensity={3}
+        uSpeed={0.7}
+        uVeinDefinition={0.75}
         
-        uRimPower={rimPower}
-        uRimStrength={rimStrength}
-        uInnerDarkness={innerDarkness}
-        uRimColor={new THREE.Color(rimColor)}
+        uRimPower={8.0}
+        uRimStrength={1.25}
+        uInnerDarkness={0.9}
+        uRimColor={uniforms.rimColor}
         
-        uRimWanderSpeed={rimWanderSpeed}
-        uRimWanderJitter={rimWanderJitter}
+        uRimWanderSpeed={1.5}
+        uRimWanderJitter={0.3}
         
-        uColorA={new THREE.Color(colorA)}
-        uColorB={new THREE.Color(colorB)}
-        uColorC={new THREE.Color(colorC)}
-        uColorD={new THREE.Color(colorD)}
+        uColorA={uniforms.colorA}
+        uColorB={uniforms.colorB}
+        uColorC={uniforms.colorC}
+        uColorD={uniforms.colorD}
+        
         {...props} 
       />
     </Sphere>
   );
-};
+});
 
 export default DistortedFluidSphere;
