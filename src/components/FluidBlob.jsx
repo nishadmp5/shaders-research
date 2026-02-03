@@ -187,7 +187,7 @@ const FluidBlob = () => {
       uSpeed: { value: 0.2 },      // Slowed down for "viscous" liquid feel
       uDistortion: { value: 0.05 }, // Reduced to maintain sphere shape
       uFrequency: { value: 3.0 },  // Lower frequency = larger, smoother blobs
-      uColorA: { value: new THREE.Color("#ff0077") },
+      uColorA: { value: new THREE.Color("#CA33C0") },
       uColorB: { value: new THREE.Color("#0055ff") },
     }),
     []
