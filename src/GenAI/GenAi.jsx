@@ -11,14 +11,14 @@ const UnifiedFluidMaterial = shaderMaterial(
   {
     // --- System Uniforms ---
     uTime: 0,
-    uHover: 0.0, // 0.0 = DistortedSphere, 1.0 = Blob
+    uHover: 0.0, // 0.0 = State A, 1.0 = State B
 
-    // --- Shared Dynamic Uniforms (Lerped in JS) ---
-    uSpeed: 0.7,
-    uDistortion: 0.0,
-    uFrequency: 3.0,
+    // --- Dynamic Uniforms (Lerped in JS) ---
+    uSpeed: 0.7,      // Lerps 0.7 -> 1.0
+    uDistortion: 0.0, // Lerps 0.0 -> 0.05 (Subtle blob)
+    uFrequency: 3.0,  // Static 3.0
 
-    // --- STATE A: Distorted Sphere Uniforms (Your Exact Settings) ---
+    // --- STATE A: Distorted Sphere Settings (Exact) ---
     uIntensity: 3.0,
     uNoiseDensity: 5.0,
     uWarpStrength: 4.0,
@@ -40,12 +40,12 @@ const UnifiedFluidMaterial = shaderMaterial(
     uColorC: new THREE.Color("#521554"),
     uColorD: new THREE.Color("#000000"),
 
-    // --- STATE B: Blob Uniforms ---
+    // --- STATE B: Blob Settings (Exact) ---
     uBlobColorA: new THREE.Color("#CA33C0"),
     uBlobColorB: new THREE.Color("#0055ff"),
   },
   // ----------------------------------------------------------------
-  // VERTEX SHADER (Finite Difference for correct normals on transition)
+  // VERTEX SHADER
   // ----------------------------------------------------------------
   `
     uniform float uTime;
@@ -119,13 +119,10 @@ const UnifiedFluidMaterial = shaderMaterial(
         float noise = getDisplacement(position);
         vNoise = noise;
         
-        // Base position with distortion applied
-        // When uDistortion is 0.0 (State A), this is just the sphere position.
+        // Base displacement
         vec3 deformedPos = position + (normal * noise * uDistortion);
 
-        // --- Recalculate Normals (Finite Difference) ---
-        // Necessary so the lighting looks correct when the blob deforms (State B)
-        // while remaining perfectly smooth when uDistortion is 0 (State A).
+        // Finite Difference Normals
         float epsilon = 0.01; 
         vec3 tangent = normalize(cross(normal, vec3(0.0, 1.0, 0.0)));
         if (length(tangent) < 0.001) tangent = normalize(cross(normal, vec3(0.0, 0.0, 1.0))); 
@@ -141,7 +138,6 @@ const UnifiedFluidMaterial = shaderMaterial(
         vec3 vb = deformedB - deformedPos;
         vec3 computedNormal = normalize(cross(va, vb));
 
-        // Output
         vec4 mvPosition = modelViewMatrix * vec4(deformedPos, 1.0);
         vViewPosition = -mvPosition.xyz;
         vViewNormal = normalMatrix * computedNormal;
@@ -207,9 +203,7 @@ const UnifiedFluidMaterial = shaderMaterial(
         return value;
     }
 
-    // ------------------------------------------------------
-    // LOGIC A: EXACT DistortedFluidMaterial logic
-    // ------------------------------------------------------
+    // --- Logic A: Distorted Sphere (Exact) ---
     vec3 getStateAColor(vec2 uv, vec3 viewDir, vec3 normal) {
         float moveTime = uTime * uSpeed; 
 
@@ -227,66 +221,64 @@ const UnifiedFluidMaterial = shaderMaterial(
         // Fluid Colors
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
         
-        // Controlled Black Veins
+        // Veins
         float blackVeins = smoothstep(0.0, uVeinDefinition, abs(f - 0.5) * 3.0);
         color = mix(color, uColorD, blackVeins);
 
-        // Deep background color
+        // Background
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
         
+        // Glow
         float widthMap = smoothstep(0.0, 1.5, length(q)); 
         float currentWidth = mix(uMinWidth, uMaxWidth, widthMap);
         float sharpness = 1.0 / max(currentWidth, 0.001);
-
         float glowIntensity = pow(f, sharpness) * 4.0;
         vec3 fluidGlow = uColorA * glowIntensity;
         
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
 
-        // Backlighting Logic (Wandering Rim)
+        // Wandering Rim
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
         float wanderY = cos(uTime * uRimWanderSpeed * 0.8) * uRimWanderJitter;
-        vec3 wanderOffset = vec3(wanderX, wanderY, 0.0);
-        
-        vec3 wanderingNormal = normalize(normal + wanderOffset);
+        vec3 wanderingNormal = normalize(normal + vec3(wanderX, wanderY, 0.0));
         float fresnel = 1.0 - dot(viewDir, wanderingNormal);
         
         finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
-
         float rimParam = pow(fresnel, uRimPower);
         vec3 rimFinal = uRimColor * rimParam * uRimStrength;
         
         return finalColor + rimFinal;
     }
 
-    // ------------------------------------------------------
-    // LOGIC B: Standard Fluid Blob logic
-    // ------------------------------------------------------
+    // --- Logic B: Fluid Blob (Exact) ---
     vec3 getStateBColor(vec3 viewDir, vec3 normal) {
+        // Fresnel
         float fresnel = 1.0 - dot(viewDir, normal);
         fresnel = clamp(fresnel, 0.0, 1.0);
+        
+        // Sharper rim
         float rim = pow(fresnel, 2.5);
-        
-        // Simple blend based on Vertex Noise
+
+        // Color blending via noise
         vec3 colorMix = mix(uBlobColorA, uBlobColorB, vNoise * 0.5 + 0.5);
-        
-        vec3 finalColor = colorMix * rim * 3.0;
-        finalColor += colorMix * 0.1;
+
+        // Composition
+        vec3 finalColor = vec3(0.0);
+        finalColor += colorMix * rim * 3.0; // Rim Glow
+        finalColor += colorMix * 0.1;       // Ambient
         
         return finalColor;
     }
 
     void main() {
-        vec2 uv = vUv * uNoiseDensity; // Apply noise density scaling for State A
+        vec2 uv = vUv * uNoiseDensity;
         vec3 viewDir = normalize(vViewPosition);
         vec3 normal = normalize(vViewNormal);
 
-        // Calculate both visual states
         vec3 colorA = getStateAColor(uv, viewDir, normal);
         vec3 colorB = getStateBColor(viewDir, normal);
 
-        // Mix based on Hover state
         gl_FragColor = vec4(mix(colorA, colorB, uHover), 1.0);
     }
   `
@@ -305,16 +297,15 @@ const GenAi = ({
   const materialRef = useRef();
   const [hovered, setHover] = useState(false);
 
-  // Define Colors exactly as requested
+  // Memoize colors
   const uniforms = useMemo(() => ({
-    // State A (Distorted) Colors
+    // State A
     rimColor: new THREE.Color("#8AAFFF"),
     colorA: new THREE.Color("#e048d7"),
     colorB: new THREE.Color("#2a7ed5"),
     colorC: new THREE.Color("#521554"),
     colorD: new THREE.Color("#000000"),
-    
-    // State B (Blob) Colors
+    // State B
     blobColorA: new THREE.Color("#CA33C0"),
     blobColorB: new THREE.Color("#0055ff"),
   }), []);
@@ -324,18 +315,18 @@ const GenAi = ({
       const mat = materialRef.current;
       mat.uTime = clock.getElapsedTime();
 
-      // Smooth Transition (Lerp)
+      // Smooth Hover Transition
       const target = hovered ? 1.0 : 0.0;
       mat.uHover = THREE.MathUtils.lerp(mat.uHover, target, 0.1);
 
-      // --- DYNAMIC MIXING ---
+      // --- CRITICAL VISUAL SETTINGS ---
       
       // 1. Distortion: 
-      // State A requires 0.0 (Smooth). State B requires ~0.4 (Blob).
+      // Lerp from 0.0 (Smooth Sphere) -> 0.05 (Subtle Blob - Matches your sample)
       mat.uDistortion = THREE.MathUtils.lerp(0.0, 0.05, mat.uHover);
 
       // 2. Speed: 
-      // State A requires 0.7. State B usually looks better slightly faster (1.0).
+      // Lerp from 0.7 (Default) -> 1.0 (Matches your sample)
       mat.uSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
     }
   });
@@ -349,7 +340,7 @@ const GenAi = ({
       <unifiedFluidMaterial
         ref={materialRef}
         
-        // --- Static Props from State A (Exact) ---
+        // --- Static Props (State A) ---
         uIntensity={3.0}
         uNoiseDensity={5.0}
         uWarpStrength={4.0}
@@ -364,7 +355,7 @@ const GenAi = ({
         uRimWanderSpeed={1.5}
         uRimWanderJitter={0.3}
         
-        // --- Color References ---
+        // --- Colors ---
         uRimColor={uniforms.rimColor}
         uColorA={uniforms.colorA}
         uColorB={uniforms.colorB}
