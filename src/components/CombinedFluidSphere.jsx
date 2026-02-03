@@ -2,26 +2,31 @@ import { Sphere, shaderMaterial } from "@react-three/drei";
 import { extend, useFrame } from "@react-three/fiber";
 import { useRef } from "react";
 import * as THREE from "three";
+import { useControls } from "leva";
 
 const DistortedFluidMaterial = shaderMaterial(
   {
     uTime: 0,
     uSpeed: 0.2,
     uDistortion: 0.01,
-    uFrequency: 1.0,
+    uFrequency: 3.0,
     uIntensity: 1.0,
     
-    // --- NEW STRUCTURAL UNIFORMS ---
-    uNoiseDensity: 10.0,     // Controls the zoom level of the noise (was 3.0)
-    uWarpStrength: 1.0,     // Controls how "swirly" the pattern is (was 1.0)
-    uGlowPower: 1.0,        // Controls sharpness of the veins (was 3.0)
-    uContrast: 0.9,         // Controls how much black space there is (via smoothstep)
+    // Structural Uniforms
+    uNoiseDensity: 2.0,
+    uWarpStrength: 1.0,
+    uContrast: 0.5,
+    uMinWidth: 0.1,
+    uMaxWidth: 1.0,
+    
+    // --- NEW: FRESNEL (EDGE) UNIFORMS ---
+    uFresnelPower: 2.0, // Controls how much it pushes to the edge
     
     uColorA: new THREE.Color("#E048D7"),
     uColorB: new THREE.Color("#5FCCFE"),
     uColorC: new THREE.Color("#521554"),
   },
-  // --- VERTEX SHADER (Unchanged) ---
+  // --- VERTEX SHADER ---
   `
     uniform float uTime;
     uniform float uDistortion;
@@ -30,14 +35,16 @@ const DistortedFluidMaterial = shaderMaterial(
 
     varying vec2 vUv;
     varying float vNoise;
-    varying vec3 vNormal;
+    varying vec3 vViewNormal;    // Normal in View Space
+    varying vec3 vViewPosition;  // Position in View Space
 
+    // ... (Simplex Noise Functions Omitted for brevity, same as before) ...
     // Standard Simplex Noise
     vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
     vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
-
+    
     float snoise(vec3 v) {
         const vec2  C = vec2(1.0/6.0, 1.0/3.0) ;
         const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
@@ -86,14 +93,23 @@ const DistortedFluidMaterial = shaderMaterial(
 
     void main() {
         vUv = uv;
-        vNormal = normal;
+        
+        // 1. Calculate View Space Normal (Essential for Fresnel)
+        vViewNormal = normalize(normalMatrix * normal);
+        
+        // 2. Calculate View Position (To know where camera is looking)
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vViewPosition = -mvPosition.xyz;
+
+        // 3. Noise & Distortion
         float noise = snoise(vec3(position * uFrequency + uTime * uSpeed));
         vNoise = noise;
         vec3 deformedPos = position + (normal * noise * uDistortion);
+        
         gl_Position = projectionMatrix * modelViewMatrix * vec4(deformedPos, 1.0);
     }
   `,
-  // --- FRAGMENT SHADER (Updated with Structural Uniforms) ---
+  // --- FRAGMENT SHADER ---
   `
     uniform float uTime;
     uniform float uIntensity;
@@ -101,20 +117,23 @@ const DistortedFluidMaterial = shaderMaterial(
     uniform vec3 uColorB;
     uniform vec3 uColorC;
     
-    // New Structural Uniforms
     uniform float uNoiseDensity;
     uniform float uWarpStrength;
-    uniform float uGlowPower;
     uniform float uContrast;
+    uniform float uMinWidth;
+    uniform float uMaxWidth;
+    
+    // NEW UNIFORM
+    uniform float uFresnelPower;
     
     varying vec2 vUv;
     varying float vNoise;
-    varying vec3 vNormal;
+    varying vec3 vViewNormal;
+    varying vec3 vViewPosition;
 
     float random (in vec2 st) {
         return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123);
     }
-
     float noise (in vec2 st) {
         vec2 i = floor(st);
         vec2 f = fract(st);
@@ -125,11 +144,9 @@ const DistortedFluidMaterial = shaderMaterial(
         vec2 u = f * f * (3.0 - 2.0 * f);
         return mix(a, b, u.x) + (c - a)* u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
     }
-
     float fbm (in vec2 st) {
         float value = 0.0;
         float amplitude = 0.5;
-        float frequency = 0.0;
         for (int i = 0; i < 5; i++) {
             value += amplitude * noise(st);
             st *= 2.0;
@@ -139,36 +156,48 @@ const DistortedFluidMaterial = shaderMaterial(
     }
 
     void main() {
-        // USE UNIFORM: Noise Density
         vec2 uv = vUv * uNoiseDensity;
         
-        // 1. Domain Warping
+        // --- NOISE GENERATION ---
         vec2 q = vec2(0.);
         q.x = fbm(uv + 0.1 * uTime);
         q.y = fbm(uv + vec2(1.0));
 
         vec2 r = vec2(0.);
-        // USE UNIFORM: Warp Strength
         r.x = fbm(uv + uWarpStrength * q + vec2(1.7, 9.2) + 0.15 * uTime);
         r.y = fbm(uv + uWarpStrength * q + vec2(8.3, 2.8) + 0.126 * uTime);
 
         float f = fbm(uv + r);
 
-        // 2. Base Color Mixing
+        // --- COLOR MIXING ---
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
         
-        // 3. Dark Theme Colored Glow
-        // USE UNIFORM: Glow Power
-        float glowIntensity = pow(f, uGlowPower) * 4.0;
+        float widthMap = smoothstep(0.0, 1.5, length(q)); 
+        float currentWidth = mix(uMinWidth, uMaxWidth, widthMap);
+        float sharpness = 1.0 / max(currentWidth, 0.001);
+
+        float glowIntensity = pow(f, sharpness) * 4.0;
         vec3 coloredGlow = uColorA * glowIntensity;
         
         vec3 finalColor = (color * uIntensity) + coloredGlow;
-
-        // 4. Final Darkening Contrast
-        // USE UNIFORM: Contrast (Controls the dark falloff)
-        // smoothstep(edge0, edge1, x) -> higher uContrast means edge0 is higher, so more black
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
+
+        // --- NEW: FRESNEL (EDGE FOCUS) LOGIC ---
+        // 1. Normalize vectors
+        vec3 viewDir = normalize(vViewPosition);
+        vec3 normal = normalize(vViewNormal);
+        
+        // 2. Calculate Dot Product (1.0 = center, 0.0 = edge)
+        // We subtract from 1.0 to reverse it (0.0 = center, 1.0 = edge)
+        float fresnel = 1.0 - dot(viewDir, normal);
+        
+        // 3. Sharpen the edge using Power
+        float edgeEffect = pow(fresnel, uFresnelPower);
+        
+        // 4. Apply to final color
+        // This will make the center black and the edges colorful
+        finalColor *= edgeEffect;
 
         gl_FragColor = vec4(finalColor, 1.0);
     }
@@ -177,9 +206,27 @@ const DistortedFluidMaterial = shaderMaterial(
 
 extend({ DistortedFluidMaterial });
 
-// Props passed here will now update the shader in real-time
 const DistortedFluidSphere = (props) => {
   const materialRef = useRef();
+
+  const { 
+    minWidth, maxWidth, 
+    noiseDensity, warpStrength, contrast, intensity, 
+    fresnelPower, // New Control
+    colorA, colorB, colorC 
+  } = useControls("Distorted Fluid", {
+    minWidth: { value: 0.1, min: 0.01, max: 2.0 },
+    maxWidth: { value: 0.5, min: 0.01, max: 2.0 },
+    noiseDensity: { value: 5.0, min: 0.1, max: 5.0 },
+    warpStrength: { value: 4.0, min: 0.0, max: 5.0 },
+    contrast: { value: 0.0, min: 0.0, max: 1.0 },
+    intensity: { value: 3, min: 0.0, max: 5.0 },
+    // Controls how "Hollow" the center looks
+    fresnelPower: { value: 0.9, min: 0.5, max: 10.0, label: "Edge Focus" }, 
+    colorA: "#e048d7",
+    colorB: "#2a7ed5",
+    colorC: "#000000",
+  });
 
   useFrame(({ clock }) => {
     if (materialRef.current) {
@@ -191,10 +238,16 @@ const DistortedFluidSphere = (props) => {
     <Sphere args={[1.5, 128, 128]}>
       <distortedFluidMaterial 
         ref={materialRef} 
-        uNoiseDensity={3.0} // Scale of the pattern (try 1.0 to 10.0)
-        uWarpStrength={1.0} // How swirly it is (try 0.0 to 5.0)
-        uGlowPower={3.0}    // Thinness of veins (higher = thinner/sharper)
-        uContrast={0.1}     // Darkness (try 0.5 for very dark, -0.5 for brighter)
+        uMinWidth={minWidth}
+        uMaxWidth={maxWidth}
+        uNoiseDensity={noiseDensity}
+        uWarpStrength={warpStrength}
+        uContrast={contrast}
+        uIntensity={intensity}
+        uFresnelPower={fresnelPower} // Pass uniform
+        uColorA={new THREE.Color(colorA)}
+        uColorB={new THREE.Color(colorB)}
+        uColorC={new THREE.Color(colorC)}
         {...props} 
       />
     </Sphere>
