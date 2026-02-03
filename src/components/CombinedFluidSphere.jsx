@@ -7,7 +7,7 @@ import { useControls } from "leva";
 const DistortedFluidMaterial = shaderMaterial(
   {
     uTime: 0,
-    uSpeed: 0.7,          // Texture flow speed
+    uSpeed: 0.7,
     uDistortion: 0.0,
     uFrequency: 3.0,
     uIntensity: 1.0,
@@ -19,19 +19,23 @@ const DistortedFluidMaterial = shaderMaterial(
     uMinWidth: 0.1,
     uMaxWidth: 1.0,
     
+    // --- NEW: VEIN CONTROL ---
+    uVeinDefinition: 0.6, // Controls how wide/sharp the black veins are
+
     // --- BACKLIGHT UNIFORMS ---
     uRimPower: 8.0,       
     uRimStrength: 1.25,    
     uInnerDarkness: 0.8,  
     uRimColor: new THREE.Color("#8AAFFF"), 
     
-    // --- NEW: WANDERING FRESNEL ---
-    uRimWanderSpeed: 1.5,  // How fast the light moves
-    uRimWanderJitter: 0.3, // How far it moves from the center
+    // --- WANDERING FRESNEL ---
+    uRimWanderSpeed: 1.5,
+    uRimWanderJitter: 0.3,
     
     uColorA: new THREE.Color("#E048D7"),
     uColorB: new THREE.Color("#5FCCFE"),
     uColorC: new THREE.Color("#521554"),
+    uColorD: new THREE.Color("#000000"), // Black
   },
   // --- VERTEX SHADER (Unchanged) ---
   `
@@ -45,7 +49,6 @@ const DistortedFluidMaterial = shaderMaterial(
     varying vec3 vViewNormal;
     varying vec3 vViewPosition;
 
-    // Simplex Noise
     vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
@@ -112,17 +115,19 @@ const DistortedFluidMaterial = shaderMaterial(
   // --- FRAGMENT SHADER (Updated) ---
   `
     uniform float uTime;
-    uniform float uSpeed; // <--- ADDED THIS HERE
+    uniform float uSpeed;
     uniform float uIntensity;
     uniform vec3 uColorA;
     uniform vec3 uColorB;
     uniform vec3 uColorC;
+    uniform vec3 uColorD;
     
     uniform float uNoiseDensity;
     uniform float uWarpStrength;
     uniform float uContrast;
     uniform float uMinWidth;
     uniform float uMaxWidth;
+    uniform float uVeinDefinition; // <--- New Uniform
     
     // Backlight Uniforms
     uniform float uRimPower;
@@ -163,18 +168,14 @@ const DistortedFluidMaterial = shaderMaterial(
 
     void main() {
         vec2 uv = vUv * uNoiseDensity;
-        
-        // Use uSpeed to control the time flow
         float moveTime = uTime * uSpeed; 
 
         // --- FLUID PATTERN ---
         vec2 q = vec2(0.);
-        // Replaced hardcoded '0.1' with uSpeed logic
         q.x = fbm(uv + 0.5 * moveTime); 
         q.y = fbm(uv + vec2(1.0));
 
         vec2 r = vec2(0.);
-        // Replaced hardcoded '0.15' and '0.126' with uSpeed logic
         r.x = fbm(uv + uWarpStrength * q + vec2(1.7, 9.2) + 0.4 * moveTime);
         r.y = fbm(uv + uWarpStrength * q + vec2(8.3, 2.8) + 0.3 * moveTime);
 
@@ -182,6 +183,16 @@ const DistortedFluidMaterial = shaderMaterial(
 
         // --- FLUID COLORS ---
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
+        
+        // --- CONTROLLED BLACK VEINS ---
+        // uVeinDefinition controls the edge of the smoothstep.
+        // Higher values = narrower veins. Lower values = wider veins.
+        float blackVeins = smoothstep(0.0, uVeinDefinition, abs(f - 0.5) * 3.0);
+        
+        // Apply the black veins
+        color = mix(color, uColorD, blackVeins);
+
+        // Mix in deep background color
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
         
         float widthMap = smoothstep(0.0, 1.5, length(q)); 
@@ -194,8 +205,7 @@ const DistortedFluidMaterial = shaderMaterial(
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
 
-        // --- BACKLIGHTING LOGIC (Wandering) ---
-        
+        // --- BACKLIGHTING LOGIC ---
         vec3 viewDir = normalize(vViewPosition);
         
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
@@ -203,13 +213,10 @@ const DistortedFluidMaterial = shaderMaterial(
         vec3 wanderOffset = vec3(wanderX, wanderY, 0.0);
         
         vec3 wanderingNormal = normalize(vViewNormal + wanderOffset);
-
         float fresnel = 1.0 - dot(viewDir, wanderingNormal);
         
-        // Inner Blocking
         finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
 
-        // Rim Light
         float rimParam = pow(fresnel, uRimPower);
         vec3 rimFinal = uRimColor * rimParam * uRimStrength;
         
@@ -226,8 +233,9 @@ const DistortedFluidSphere = (props) => {
   const { 
     minWidth, maxWidth, 
     noiseDensity, warpStrength, contrast, intensity, 
+    veinDefinition, // <--- Destructure new control
     rimPower, rimStrength, innerDarkness, rimColor,
-    colorA, colorB, colorC,
+    colorA, colorB, colorC, colorD,
     speed,
     rimWanderSpeed, rimWanderJitter 
   } = useControls("Distorted Fluid", {
@@ -235,23 +243,25 @@ const DistortedFluidSphere = (props) => {
     maxWidth: { value: 0.5, min: 0.01, max: 2.0 },
     noiseDensity: { value: 5.0, min: 0.1, max: 5.0 },
     warpStrength: { value: 4.0, min: 0.0, max: 5.0 },
-    contrast: { value: 0.0, min: 0.0, max: 1.0 },
+    contrast: { value: 0.5, min: 0.0, max: 1.0 },
     intensity: { value: 3, min: 0.0, max: 5.0 },
     speed: { value: 0.7, min: 0.0, max: 2.0, label: "Flow Speed" },
     
-    // Backlight Controls
+    // New Vein Control
+    veinDefinition: { value: 0.75, min: 0.1, max: 3.0, label: "Black Vein Spread" },
+    
     rimPower: { value: 8.0, min: 0.5, max: 8.0, label: "Backlight Edge Sharpness" },
-    rimStrength: { value: 1.5, min: 0.0, max: 5.0, label: "Backlight Brightness" },
+    rimStrength: { value: 1.25, min: 0.0, max: 5.0, label: "Backlight Brightness" },
     innerDarkness: { value: 0.9, min: 0.0, max: 1.0, label: "Blocking Opacity" },
     rimColor: { value: "#8AAFFF", label: "Backlight Color" },
     
-    // Wander Controls
     rimWanderSpeed: { value: 1.5, min: 0.1, max: 3.0, label: "Wander Speed" },
     rimWanderJitter: { value: 0.3, min: 0.0, max: 1.0, label: "Wander Distance" },
     
     colorA: "#e048d7",
     colorB: "#2a7ed5",
-    colorC: "#000000",
+    colorC: "#521554", 
+    colorD: "#000000",
   });
 
   useFrame(({ clock }) => {
@@ -272,20 +282,21 @@ const DistortedFluidSphere = (props) => {
         uIntensity={intensity}
         uSpeed={speed}
         
-        // Backlight Props
+        // Pass the new uniform
+        uVeinDefinition={veinDefinition}
+        
         uRimPower={rimPower}
         uRimStrength={rimStrength}
         uInnerDarkness={innerDarkness}
         uRimColor={new THREE.Color(rimColor)}
         
-        // Wander Props
         uRimWanderSpeed={rimWanderSpeed}
         uRimWanderJitter={rimWanderJitter}
         
-        // Colors
         uColorA={new THREE.Color(colorA)}
         uColorB={new THREE.Color(colorB)}
         uColorC={new THREE.Color(colorC)}
+        uColorD={new THREE.Color(colorD)}
         {...props} 
       />
     </Sphere>
