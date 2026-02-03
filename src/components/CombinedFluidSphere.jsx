@@ -7,7 +7,7 @@ import { useControls } from "leva";
 const DistortedFluidMaterial = shaderMaterial(
   {
     uTime: 0,
-    uSpeed: 0.6,          // Texture flow speed
+    uSpeed: 0.7,          // Texture flow speed
     uDistortion: 0.0,
     uFrequency: 3.0,
     uIntensity: 1.0,
@@ -21,7 +21,7 @@ const DistortedFluidMaterial = shaderMaterial(
     
     // --- BACKLIGHT UNIFORMS ---
     uRimPower: 8.0,       
-    uRimStrength: 1.0,    
+    uRimStrength: 1.25,    
     uInnerDarkness: 0.8,  
     uRimColor: new THREE.Color("#8AAFFF"), 
     
@@ -33,7 +33,7 @@ const DistortedFluidMaterial = shaderMaterial(
     uColorB: new THREE.Color("#5FCCFE"),
     uColorC: new THREE.Color("#521554"),
   },
-  // --- VERTEX SHADER ---
+  // --- VERTEX SHADER (Unchanged) ---
   `
     uniform float uTime;
     uniform float uDistortion;
@@ -109,9 +109,10 @@ const DistortedFluidMaterial = shaderMaterial(
         gl_Position = projectionMatrix * modelViewMatrix * vec4(deformedPos, 1.0);
     }
   `,
-  // --- FRAGMENT SHADER ---
+  // --- FRAGMENT SHADER (Updated) ---
   `
     uniform float uTime;
+    uniform float uSpeed; // <--- ADDED THIS HERE
     uniform float uIntensity;
     uniform vec3 uColorA;
     uniform vec3 uColorB;
@@ -163,14 +164,19 @@ const DistortedFluidMaterial = shaderMaterial(
     void main() {
         vec2 uv = vUv * uNoiseDensity;
         
+        // Use uSpeed to control the time flow
+        float moveTime = uTime * uSpeed; 
+
         // --- FLUID PATTERN ---
         vec2 q = vec2(0.);
-        q.x = fbm(uv + 0.1 * uTime);
+        // Replaced hardcoded '0.1' with uSpeed logic
+        q.x = fbm(uv + 0.5 * moveTime); 
         q.y = fbm(uv + vec2(1.0));
 
         vec2 r = vec2(0.);
-        r.x = fbm(uv + uWarpStrength * q + vec2(1.7, 9.2) + 0.15 * uTime);
-        r.y = fbm(uv + uWarpStrength * q + vec2(8.3, 2.8) + 0.126 * uTime);
+        // Replaced hardcoded '0.15' and '0.126' with uSpeed logic
+        r.x = fbm(uv + uWarpStrength * q + vec2(1.7, 9.2) + 0.4 * moveTime);
+        r.y = fbm(uv + uWarpStrength * q + vec2(8.3, 2.8) + 0.3 * moveTime);
 
         float f = fbm(uv + r);
 
@@ -192,22 +198,18 @@ const DistortedFluidMaterial = shaderMaterial(
         
         vec3 viewDir = normalize(vViewPosition);
         
-        // 1. Create a wandering offset vector based on time
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
         float wanderY = cos(uTime * uRimWanderSpeed * 0.8) * uRimWanderJitter;
         vec3 wanderOffset = vec3(wanderX, wanderY, 0.0);
         
-        // 2. Perturb the normal used for Fresnel calculation
-        // This makes the "center" of the sphere appear to drift
         vec3 wanderingNormal = normalize(vViewNormal + wanderOffset);
 
-        // 3. Calculate Fresnel with the wandering normal
         float fresnel = 1.0 - dot(viewDir, wanderingNormal);
         
-        // 4. Inner Blocking (Shadow)
+        // Inner Blocking
         finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
 
-        // 5. Rim Light
+        // Rim Light
         float rimParam = pow(fresnel, uRimPower);
         vec3 rimFinal = uRimColor * rimParam * uRimStrength;
         
@@ -227,7 +229,7 @@ const DistortedFluidSphere = (props) => {
     rimPower, rimStrength, innerDarkness, rimColor,
     colorA, colorB, colorC,
     speed,
-    rimWanderSpeed, rimWanderJitter // New Controls
+    rimWanderSpeed, rimWanderJitter 
   } = useControls("Distorted Fluid", {
     minWidth: { value: 0.1, min: 0.01, max: 2.0 },
     maxWidth: { value: 0.5, min: 0.01, max: 2.0 },
@@ -235,11 +237,11 @@ const DistortedFluidSphere = (props) => {
     warpStrength: { value: 4.0, min: 0.0, max: 5.0 },
     contrast: { value: 0.0, min: 0.0, max: 1.0 },
     intensity: { value: 3, min: 0.0, max: 5.0 },
-    speed: { value: 0.6, min: 0.0, max: 2.0, label: "Flow Speed" },
+    speed: { value: 0.7, min: 0.0, max: 2.0, label: "Flow Speed" },
     
     // Backlight Controls
     rimPower: { value: 8.0, min: 0.5, max: 8.0, label: "Backlight Edge Sharpness" },
-    rimStrength: { value: 1.0, min: 0.0, max: 5.0, label: "Backlight Brightness" },
+    rimStrength: { value: 1.5, min: 0.0, max: 5.0, label: "Backlight Brightness" },
     innerDarkness: { value: 0.9, min: 0.0, max: 1.0, label: "Blocking Opacity" },
     rimColor: { value: "#8AAFFF", label: "Backlight Color" },
     

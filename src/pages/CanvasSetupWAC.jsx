@@ -10,9 +10,9 @@ const CanvasSetupWAC = () => {
       <div style={{ width: "100vw", height: "100vh", background: "#050505" }}>
         <Canvas camera={{ position: [0, 0, 3] }}>
           {/* <FluidSphere/> */}
-          <FluidBlob/>
+          {/* <FluidBlob/> */}
           <OrbitControls />
-          {/* <DistortedFluidSphere /> */}
+          <DistortedFluidSphere />
         </Canvas>
       </div>
     </div>
