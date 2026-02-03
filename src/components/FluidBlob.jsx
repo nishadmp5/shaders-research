@@ -158,7 +158,7 @@ const fragmentShader = `
     fresnel = clamp(1.0 - fresnel, 0.0, 1.0);
     
     // Sharper rim for the "Bubble" look
-    float rim = pow(fresnel, 4.0);
+    float rim = pow(fresnel, 2.5);
 
     // Smooth color blending
     // Using vNoise to vary color subtly across the surface
@@ -184,8 +184,8 @@ const FluidBlob = () => {
   const uniforms = useMemo(
     () => ({
       uTime: { value: 0 },
-      uSpeed: { value: 0.2 },      // Slowed down for "viscous" liquid feel
-      uDistortion: { value: 0.05 }, // Reduced to maintain sphere shape
+      uSpeed: { value: 1.0 },      // Slowed down for "viscous" liquid feel
+      uDistortion: { value: 0.0 }, // Reduced to maintain sphere shape
       uFrequency: { value: 3.0 },  // Lower frequency = larger, smoother blobs
       uColorA: { value: new THREE.Color("#CA33C0") },
       uColorB: { value: new THREE.Color("#0055ff") },

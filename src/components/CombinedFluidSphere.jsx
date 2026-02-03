@@ -7,7 +7,7 @@ import { useControls } from "leva";
 const DistortedFluidMaterial = shaderMaterial(
   {
     uTime: 0,
-    uSpeed: 0.2,
+    uSpeed: 0.6,          // Texture flow speed
     uDistortion: 0.0,
     uFrequency: 3.0,
     uIntensity: 1.0,
@@ -19,16 +19,21 @@ const DistortedFluidMaterial = shaderMaterial(
     uMinWidth: 0.1,
     uMaxWidth: 1.0,
     
-    // --- NEW BACKLIGHT UNIFORMS ---
-    uRimPower: 2.0,       // Sharpness of the edge light
-    uRimStrength: 1.0,    // Brightness of the light source behind
-    uInnerDarkness: 0.8,  // How much the center blocks light (0 = Clear, 1 = Black Silhouette)
+    // --- BACKLIGHT UNIFORMS ---
+    uRimPower: 8.0,       
+    uRimStrength: 1.0,    
+    uInnerDarkness: 0.8,  
+    uRimColor: new THREE.Color("#8AAFFF"), 
+    
+    // --- NEW: WANDERING FRESNEL ---
+    uRimWanderSpeed: 1.5,  // How fast the light moves
+    uRimWanderJitter: 0.3, // How far it moves from the center
     
     uColorA: new THREE.Color("#E048D7"),
     uColorB: new THREE.Color("#5FCCFE"),
     uColorC: new THREE.Color("#521554"),
   },
-  // --- VERTEX SHADER (Unchanged) ---
+  // --- VERTEX SHADER ---
   `
     uniform float uTime;
     uniform float uDistortion;
@@ -40,7 +45,7 @@ const DistortedFluidMaterial = shaderMaterial(
     varying vec3 vViewNormal;
     varying vec3 vViewPosition;
 
-    // (Simplex Noise Functions hidden for brevity)
+    // Simplex Noise
     vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
@@ -118,10 +123,15 @@ const DistortedFluidMaterial = shaderMaterial(
     uniform float uMinWidth;
     uniform float uMaxWidth;
     
-    // Updated Backlight Uniforms
+    // Backlight Uniforms
     uniform float uRimPower;
     uniform float uRimStrength;
     uniform float uInnerDarkness;
+    uniform vec3 uRimColor;
+    
+    // Wander Uniforms
+    uniform float uRimWanderSpeed;
+    uniform float uRimWanderJitter;
     
     varying vec2 vUv;
     varying float vNoise;
@@ -178,29 +188,30 @@ const DistortedFluidMaterial = shaderMaterial(
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
 
-        // --- BACKLIGHTING LOGIC ---
+        // --- BACKLIGHTING LOGIC (Wandering) ---
         
-        // 1. Calculate Fresnel (View Angle)
         vec3 viewDir = normalize(vViewPosition);
-        vec3 normal = normalize(vViewNormal);
-        // Fresnel: 0.0 at center, 1.0 at edge
-        float fresnel = 1.0 - dot(viewDir, normal); 
         
-        // 2. Inner Blocking (Shadow)
-        // We darken the fluid pattern in the center to look like it's blocking light
-        // uInnerDarkness of 1.0 means center is black. 0.0 means no shadow.
-        // We invert fresnel for the shadow map (1.0 at center)
-        float shadowMap = 1.0 - (fresnel * uInnerDarkness); 
-        // Clamp to prevent negative colors
+        // 1. Create a wandering offset vector based on time
+        float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
+        float wanderY = cos(uTime * uRimWanderSpeed * 0.8) * uRimWanderJitter;
+        vec3 wanderOffset = vec3(wanderX, wanderY, 0.0);
+        
+        // 2. Perturb the normal used for Fresnel calculation
+        // This makes the "center" of the sphere appear to drift
+        vec3 wanderingNormal = normalize(vViewNormal + wanderOffset);
+
+        // 3. Calculate Fresnel with the wandering normal
+        float fresnel = 1.0 - dot(viewDir, wanderingNormal);
+        
+        // 4. Inner Blocking (Shadow)
         finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
 
-        // 3. Rim Light (The Light Source Behind)
-        // This is ADDED on top, creating the bright halo
+        // 5. Rim Light
         float rimParam = pow(fresnel, uRimPower);
-        // We tint the rim with Color A to match the theme, or use white for pure light
-        vec3 rimColor = mix(vec3(1.0), uColorA, 0.5) * rimParam * uRimStrength;
+        vec3 rimFinal = uRimColor * rimParam * uRimStrength;
         
-        gl_FragColor = vec4(finalColor + rimColor, 1.0);
+        gl_FragColor = vec4(finalColor + rimFinal, 1.0);
     }
   `
 );
@@ -213,8 +224,10 @@ const DistortedFluidSphere = (props) => {
   const { 
     minWidth, maxWidth, 
     noiseDensity, warpStrength, contrast, intensity, 
-    rimPower, rimStrength, innerDarkness,
-    colorA, colorB, colorC 
+    rimPower, rimStrength, innerDarkness, rimColor,
+    colorA, colorB, colorC,
+    speed,
+    rimWanderSpeed, rimWanderJitter // New Controls
   } = useControls("Distorted Fluid", {
     minWidth: { value: 0.1, min: 0.01, max: 2.0 },
     maxWidth: { value: 0.5, min: 0.01, max: 2.0 },
@@ -222,11 +235,17 @@ const DistortedFluidSphere = (props) => {
     warpStrength: { value: 4.0, min: 0.0, max: 5.0 },
     contrast: { value: 0.0, min: 0.0, max: 1.0 },
     intensity: { value: 3, min: 0.0, max: 5.0 },
+    speed: { value: 0.6, min: 0.0, max: 2.0, label: "Flow Speed" },
     
-    // New Backlight Controls
-    rimPower: { value: 6.0, min: 0.5, max: 8.0, label: "Backlight Edge Sharpness" },
+    // Backlight Controls
+    rimPower: { value: 8.0, min: 0.5, max: 8.0, label: "Backlight Edge Sharpness" },
     rimStrength: { value: 1.0, min: 0.0, max: 5.0, label: "Backlight Brightness" },
     innerDarkness: { value: 0.9, min: 0.0, max: 1.0, label: "Blocking Opacity" },
+    rimColor: { value: "#8AAFFF", label: "Backlight Color" },
+    
+    // Wander Controls
+    rimWanderSpeed: { value: 1.5, min: 0.1, max: 3.0, label: "Wander Speed" },
+    rimWanderJitter: { value: 0.3, min: 0.0, max: 1.0, label: "Wander Distance" },
     
     colorA: "#e048d7",
     colorB: "#2a7ed5",
@@ -249,10 +268,18 @@ const DistortedFluidSphere = (props) => {
         uWarpStrength={warpStrength}
         uContrast={contrast}
         uIntensity={intensity}
-        // New Props
+        uSpeed={speed}
+        
+        // Backlight Props
         uRimPower={rimPower}
         uRimStrength={rimStrength}
         uInnerDarkness={innerDarkness}
+        uRimColor={new THREE.Color(rimColor)}
+        
+        // Wander Props
+        uRimWanderSpeed={rimWanderSpeed}
+        uRimWanderJitter={rimWanderJitter}
+        
         // Colors
         uColorA={new THREE.Color(colorA)}
         uColorB={new THREE.Color(colorB)}
