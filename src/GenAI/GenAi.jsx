@@ -15,7 +15,7 @@ const UnifiedFluidMaterial = shaderMaterial(
     uPhase: 0,
 
     // --- Dynamic Uniforms ---
-    uDistortion: 0.0, 
+    uDistortion: 0.01, 
     uFrequency: 3.0,
 
     // --- STATE A: Distorted Sphere Settings ---
@@ -299,7 +299,6 @@ const GenAi = ({
 
       // Gentle Rotation
       mesh.rotation.y += 0.002;
-      mesh.rotation.z += 0.001;
 
       // Hover
       const target = hovered ? 1.0 : 0.0;
@@ -307,7 +306,7 @@ const GenAi = ({
       if (Math.abs(mat.uHover - target) < 0.001) mat.uHover = target;
 
       // Visuals
-      mat.uDistortion = THREE.MathUtils.lerp(0.0, 0.05, mat.uHover);
+      mat.uDistortion = THREE.MathUtils.lerp(0.01, 0.05, mat.uHover);
       const currentSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
       
       phaseRef.current += delta * currentSpeed;
@@ -321,9 +320,6 @@ const GenAi = ({
       args={[radius, segments, segments]}
       onPointerOver={() => setHover(true)}
       onPointerOut={() => setHover(false)}
-      // FIX 1: Disable frustum culling. 
-      // This forces Three.js to render the object even if the bounding box 
-      // suggests it is off-screen, fixing the clipped borders.
       frustumCulled={false} 
     >
       <unifiedFluidMaterial

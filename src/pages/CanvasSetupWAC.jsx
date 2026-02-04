@@ -11,7 +11,7 @@ const CanvasSetupWAC = () => {
         <Canvas camera={{ position: [0, 0, 3] }}>
           {/* <DistortedFluidSphere/> */}
           {/* <FluidBlob/> */}
-          <OrbitControls />
+          {/* <OrbitControls /> */}
           <GenAi/>
         </Canvas>
       </div>
