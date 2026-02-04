@@ -14,6 +14,7 @@
     "@react-three/fiber": "^9.5.0",
     "@tailwindcss/vite": "^4.1.18",
     "leva": "^0.10.1",
+    "maath": "^0.10.8",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4.1.18",
