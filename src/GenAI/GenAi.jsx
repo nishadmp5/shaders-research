@@ -4,21 +4,16 @@ import React, { useRef, useMemo, useState } from "react";
 import * as THREE from "three";
 
 // ------------------------------------------------------------------
-// 1. UNIFIED SHADER MATERIAL
+// 1. UNIFIED SHADER MATERIAL (Unchanged)
 // ------------------------------------------------------------------
-
+// ... (Keep your existing material code here) ...
 const UnifiedFluidMaterial = shaderMaterial(
   {
-    // --- System Uniforms ---
     uTime: 0,
     uHover: 0.0,
     uPhase: 0,
-
-    // --- Dynamic Uniforms ---
-    uDistortion: 0.01, 
+    uDistortion: 0.01,
     uFrequency: 3.0,
-
-    // --- STATE A: Distorted Sphere Settings ---
     uIntensity: 3.0,
     uNoiseDensity: 5.0,
     uWarpStrength: 4.0,
@@ -36,19 +31,14 @@ const UnifiedFluidMaterial = shaderMaterial(
     uColorB: new THREE.Color("#2a7ed5"),
     uColorC: new THREE.Color("#521554"),
     uColorD: new THREE.Color("#000000"),
-
-    // --- STATE B: Blob Settings ---
     uBlobColorA: new THREE.Color("#CA33C0"),
     uBlobColorB: new THREE.Color("#0055ff"),
   },
-  // ----------------------------------------------------------------
-  // VERTEX SHADER
-  // ----------------------------------------------------------------
+  // Vertex Shader
   `
     uniform float uPhase;
     uniform float uFrequency;
     uniform float uDistortion;
-
     varying vec2 vUv;
     varying float vNoise;
     varying vec3 vViewNormal;
@@ -114,24 +104,16 @@ const UnifiedFluidMaterial = shaderMaterial(
         vUv = uv;
         float noise = getDisplacement(position);
         vNoise = noise;
-        
         vec3 deformedPos = position + (normal * noise * uDistortion);
 
         // Finite Difference Normals
-        float epsilon = 0.001; // FIX: Reduced epsilon for higher precision
-        
-        // FIX: Biased Tangent Calculation
-        // By using (0.0, 1.0, 1.0) instead of (0,1,0), we ensure the vector
-        // never runs parallel to the pole normal (0,1,0), preventing the "Hole" artifact.
+        float epsilon = 0.001; 
         vec3 tangent = normalize(cross(normal, vec3(0.0, 1.0, 1.0))); 
         vec3 bitangent = normalize(cross(normal, tangent));
-        
         vec3 neighborA = position + tangent * epsilon;
         vec3 neighborB = position + bitangent * epsilon;
-        
         vec3 deformedA = neighborA + (normal * getDisplacement(neighborA) * uDistortion);
         vec3 deformedB = neighborB + (normal * getDisplacement(neighborB) * uDistortion);
-        
         vec3 va = deformedA - deformedPos;
         vec3 vb = deformedB - deformedPos;
         vec3 computedNormal = normalize(cross(va, vb));
@@ -142,10 +124,8 @@ const UnifiedFluidMaterial = shaderMaterial(
         gl_Position = projectionMatrix * mvPosition;
     }
   `,
-  // ----------------------------------------------------------------
-  // FRAGMENT SHADER (Unchanged)
-  // ----------------------------------------------------------------
- `
+  // Fragment Shader
+  `
     uniform float uTime;
     uniform float uHover;
     uniform float uPhase;
@@ -198,8 +178,6 @@ const UnifiedFluidMaterial = shaderMaterial(
 
     vec3 getStateAColor(vec2 uv, vec3 viewDir, vec3 normal) {
         float moveTime = uPhase; 
-        
-        // --- TEXTURE GENERATION ---
         vec2 q = vec2(0.);
         q.x = fbm(uv + 0.5 * moveTime); 
         q.y = fbm(uv + vec2(1.0));
@@ -207,14 +185,10 @@ const UnifiedFluidMaterial = shaderMaterial(
         r.x = fbm(uv + uWarpStrength * q + vec2(1.7, 9.2) + 0.4 * moveTime);
         r.y = fbm(uv + uWarpStrength * q + vec2(8.3, 2.8) + 0.3 * moveTime);
         float f = fbm(uv + r);
-        
-        // --- COLOR MIXING ---
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
         float blackVeins = smoothstep(0.0, uVeinDefinition, abs(f - 0.5) * 3.0);
         color = mix(color, uColorD, blackVeins);
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
-        
-        // --- GLOW & HIGHLIGHTS ---
         float widthMap = smoothstep(0.0, 1.5, length(q)); 
         float currentWidth = mix(uMinWidth, uMaxWidth, widthMap);
         float sharpness = 1.0 / max(currentWidth, 0.001);
@@ -222,8 +196,6 @@ const UnifiedFluidMaterial = shaderMaterial(
         vec3 fluidGlow = uColorA * glowIntensity;
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
-        
-        // --- RIM LIGHT ---
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
         float wanderY = cos(uTime * uRimWanderSpeed * 0.8) * uRimWanderJitter;
         vec3 wanderingNormal = normalize(normal + vec3(wanderX, wanderY, 0.0));
@@ -231,7 +203,6 @@ const UnifiedFluidMaterial = shaderMaterial(
         finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
         float rimParam = pow(fresnel, uRimPower);
         vec3 rimFinal = uRimColor * rimParam * uRimStrength;
-        
         return finalColor + rimFinal;
     }
 
@@ -247,19 +218,12 @@ const UnifiedFluidMaterial = shaderMaterial(
     }
 
     void main() {
-        // --- FIX: MIRROR UVS TO HIDE SEAM ---
-        // Instead of vUv directly, we use the absolute distance from 0.5.
-        // This ensures 0.0 and 1.0 map to the same value, eliminating the cut.
         vec2 seamlessUv = vec2(abs(vUv.x - 0.5) * 2.0, vUv.y);
-        
         vec2 uv = seamlessUv * uNoiseDensity;
-        
         vec3 viewDir = normalize(vViewPosition);
         vec3 normal = normalize(vViewNormal);
-        
         vec3 colorA = getStateAColor(uv, viewDir, normal);
         vec3 colorB = getStateBColor(viewDir, normal);
-        
         gl_FragColor = vec4(mix(colorA, colorB, uHover), 1.0);
     }
   `
@@ -276,7 +240,8 @@ const GenAi = ({
   segments = 256 
 }) => {
   const materialRef = useRef();
-  const meshRef = useRef();
+  const meshRef = useRef(); // Tracks the Sphere (Inner rotation)
+  const groupRef = useRef(); // Tracks the Group (Mouse tilt)
   const [hovered, setHover] = useState(false);
   const phaseRef = useRef(0);
 
@@ -290,66 +255,77 @@ const GenAi = ({
     blobColorB: new THREE.Color("#0055ff"),
   }), []);
 
-  useFrame(({ clock }, delta) => {
-    if (materialRef.current && meshRef.current) {
+  useFrame((state, delta) => {
+    // 1. UPDATE SHADER
+    if (materialRef.current) {
       const mat = materialRef.current;
-      const mesh = meshRef.current;
+      mat.uTime = state.clock.getElapsedTime();
       
-      mat.uTime = clock.getElapsedTime();
-
-      // Gentle Rotation
-      mesh.rotation.y += 0.002;
-
-      // Hover
       const target = hovered ? 1.0 : 0.0;
       mat.uHover = THREE.MathUtils.lerp(mat.uHover, target, 0.1);
-      if (Math.abs(mat.uHover - target) < 0.001) mat.uHover = target;
-
-      // Visuals
-      mat.uDistortion = THREE.MathUtils.lerp(0.01, 0.05, mat.uHover);
-      const currentSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
       
+      mat.uDistortion = THREE.MathUtils.lerp(0.005, 0.03, mat.uHover);
+      const currentSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
       phaseRef.current += delta * currentSpeed;
       mat.uPhase = phaseRef.current;
+    }
+
+    // 2. INNER ROTATION (Continuous Spin)
+    if (meshRef.current) {
+      meshRef.current.rotation.y += 0.002;
+    }
+
+    // 3. OUTER TILT (Mouse Interaction)
+    if (groupRef.current) {
+      const { pointer } = state; 
+      
+      const tiltStrength = 0.25
+      
+      const targetX = pointer.y * -tiltStrength; 
+      const targetY = pointer.x * tiltStrength; 
+      
+      groupRef.current.rotation.x = THREE.MathUtils.lerp(groupRef.current.rotation.x, targetX, 0.05);
+      groupRef.current.rotation.y = THREE.MathUtils.lerp(groupRef.current.rotation.y, targetY, 0.05);
     }
   });
 
   return (
-    <Sphere 
-      ref={meshRef}
-      args={[radius, segments, segments]}
-      onPointerOver={() => setHover(true)}
-      onPointerOut={() => setHover(false)}
-      frustumCulled={false} 
-    >
-      <unifiedFluidMaterial
-        ref={materialRef}
-        uPhase={0}
-        
-        // --- Static Props ---
-        uIntensity={3.0}
-        uNoiseDensity={5.0}
-        uWarpStrength={4.0}
-        uContrast={0.5}
-        uMinWidth={0.1}
-        uMaxWidth={0.5}
-        uVeinDefinition={0.75}
-        uRimPower={8.0}
-        uRimStrength={1.25}
-        uInnerDarkness={0.9}
-        uRimWanderSpeed={1.5}
-        uRimWanderJitter={0.3}
-        
-        // --- Colors ---
-        uRimColor={uniforms.rimColor}
-        uColorA={uniforms.colorA}
-        uColorB={uniforms.colorB}
-        uColorC={uniforms.colorC}
-        uColorD={uniforms.colorD}
-        uBlobColorA={uniforms.blobColorA}
-        uBlobColorB={uniforms.blobColorB}
-      />
-    </Sphere>
+    // WRAPPER GROUP handles the Tilt
+    <group ref={groupRef}>
+      <Sphere 
+        ref={meshRef} // SPHERE handles the Spin
+        args={[radius, segments, segments]}
+        onPointerOver={() => setHover(true)}
+        onPointerOut={() => setHover(false)}
+        frustumCulled={false} 
+      >
+        <unifiedFluidMaterial
+          ref={materialRef}
+          uPhase={0}
+          // --- Static Props ---
+          uIntensity={3.0}
+          uNoiseDensity={5.0}
+          uWarpStrength={4.0}
+          uContrast={0.5}
+          uMinWidth={0.1}
+          uMaxWidth={0.5}
+          uVeinDefinition={0.75}
+          uRimPower={8.0}
+          uRimStrength={1.25}
+          uInnerDarkness={0.9}
+          uRimWanderSpeed={1.5}
+          uRimWanderJitter={0.3}
+          // --- Colors ---
+          uRimColor={uniforms.rimColor}
+          uColorA={uniforms.colorA}
+          uColorB={uniforms.colorB}
+          uColorC={uniforms.colorC}
+          uColorD={uniforms.colorD}
+          uBlobColorA={uniforms.blobColorA}
+          uBlobColorB={uniforms.blobColorB}
+        />
+      </Sphere>
+    </group>
   );
 };
 
