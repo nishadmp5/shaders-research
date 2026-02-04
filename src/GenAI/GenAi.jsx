@@ -145,7 +145,7 @@ const UnifiedFluidMaterial = shaderMaterial(
   // ----------------------------------------------------------------
   // FRAGMENT SHADER (Unchanged)
   // ----------------------------------------------------------------
-  `
+ `
     uniform float uTime;
     uniform float uHover;
     uniform float uPhase;
@@ -198,6 +198,8 @@ const UnifiedFluidMaterial = shaderMaterial(
 
     vec3 getStateAColor(vec2 uv, vec3 viewDir, vec3 normal) {
         float moveTime = uPhase; 
+        
+        // --- TEXTURE GENERATION ---
         vec2 q = vec2(0.);
         q.x = fbm(uv + 0.5 * moveTime); 
         q.y = fbm(uv + vec2(1.0));
@@ -205,10 +207,14 @@ const UnifiedFluidMaterial = shaderMaterial(
         r.x = fbm(uv + uWarpStrength * q + vec2(1.7, 9.2) + 0.4 * moveTime);
         r.y = fbm(uv + uWarpStrength * q + vec2(8.3, 2.8) + 0.3 * moveTime);
         float f = fbm(uv + r);
+        
+        // --- COLOR MIXING ---
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
         float blackVeins = smoothstep(0.0, uVeinDefinition, abs(f - 0.5) * 3.0);
         color = mix(color, uColorD, blackVeins);
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
+        
+        // --- GLOW & HIGHLIGHTS ---
         float widthMap = smoothstep(0.0, 1.5, length(q)); 
         float currentWidth = mix(uMinWidth, uMaxWidth, widthMap);
         float sharpness = 1.0 / max(currentWidth, 0.001);
@@ -216,6 +222,8 @@ const UnifiedFluidMaterial = shaderMaterial(
         vec3 fluidGlow = uColorA * glowIntensity;
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
+        
+        // --- RIM LIGHT ---
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
         float wanderY = cos(uTime * uRimWanderSpeed * 0.8) * uRimWanderJitter;
         vec3 wanderingNormal = normalize(normal + vec3(wanderX, wanderY, 0.0));
@@ -223,6 +231,7 @@ const UnifiedFluidMaterial = shaderMaterial(
         finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
         float rimParam = pow(fresnel, uRimPower);
         vec3 rimFinal = uRimColor * rimParam * uRimStrength;
+        
         return finalColor + rimFinal;
     }
 
@@ -238,11 +247,19 @@ const UnifiedFluidMaterial = shaderMaterial(
     }
 
     void main() {
-        vec2 uv = vUv * uNoiseDensity;
+        // --- FIX: MIRROR UVS TO HIDE SEAM ---
+        // Instead of vUv directly, we use the absolute distance from 0.5.
+        // This ensures 0.0 and 1.0 map to the same value, eliminating the cut.
+        vec2 seamlessUv = vec2(abs(vUv.x - 0.5) * 2.0, vUv.y);
+        
+        vec2 uv = seamlessUv * uNoiseDensity;
+        
         vec3 viewDir = normalize(vViewPosition);
         vec3 normal = normalize(vViewNormal);
+        
         vec3 colorA = getStateAColor(uv, viewDir, normal);
         vec3 colorB = getStateBColor(viewDir, normal);
+        
         gl_FragColor = vec4(mix(colorA, colorB, uHover), 1.0);
     }
   `
@@ -290,7 +307,7 @@ const GenAi = ({
       if (Math.abs(mat.uHover - target) < 0.001) mat.uHover = target;
 
       // Visuals
-      mat.uDistortion = THREE.MathUtils.lerp(0.01, 0.05, mat.uHover);
+      mat.uDistortion = THREE.MathUtils.lerp(0.0, 0.05, mat.uHover);
       const currentSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
       
       phaseRef.current += delta * currentSpeed;
