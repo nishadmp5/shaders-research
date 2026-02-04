@@ -12,9 +12,9 @@ const UnifiedFluidMaterial = shaderMaterial(
     // --- System Uniforms ---
     uTime: 0,
     uHover: 0.0, // 0.0 = State A, 1.0 = State B
+    uPhase: 0,   // <--- NEW: Replaces uTime * uSpeed for movement
 
-    // --- Dynamic Uniforms (Lerped in JS) ---
-    uSpeed: 0.7,      // Lerps 0.7 -> 1.0
+    // --- Dynamic Uniforms (Note: uSpeed is now handled in JS) ---
     uDistortion: 0.0, // Lerps 0.0 -> 0.05 (Subtle blob)
     uFrequency: 3.0,  // Static 3.0
 
@@ -48,8 +48,7 @@ const UnifiedFluidMaterial = shaderMaterial(
   // VERTEX SHADER
   // ----------------------------------------------------------------
   `
-    uniform float uTime;
-    uniform float uSpeed;
+    uniform float uPhase; // Updated from uTime * uSpeed
     uniform float uFrequency;
     uniform float uDistortion;
 
@@ -111,7 +110,8 @@ const UnifiedFluidMaterial = shaderMaterial(
     }
 
     float getDisplacement(vec3 position) {
-        return snoise(vec3(position * uFrequency + uTime * uSpeed));
+        // USE PHASE INSTEAD OF TIME
+        return snoise(vec3(position * uFrequency + uPhase));
     }
 
     void main() {
@@ -150,7 +150,7 @@ const UnifiedFluidMaterial = shaderMaterial(
   `
     uniform float uTime;
     uniform float uHover;
-    uniform float uSpeed;
+    uniform float uPhase; // Updated from uTime * uSpeed
     
     // -- State A Uniforms --
     uniform float uIntensity;
@@ -205,7 +205,8 @@ const UnifiedFluidMaterial = shaderMaterial(
 
     // --- Logic A: Distorted Sphere (Exact) ---
     vec3 getStateAColor(vec2 uv, vec3 viewDir, vec3 normal) {
-        float moveTime = uTime * uSpeed; 
+        // USE PHASE INSTEAD OF TIME * SPEED
+        float moveTime = uPhase; 
 
         // Fluid Pattern
         vec2 q = vec2(0.);
@@ -238,7 +239,7 @@ const UnifiedFluidMaterial = shaderMaterial(
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
 
-        // Wandering Rim
+        // Wandering Rim (Keeps uTime because wander speed is constant)
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
         float wanderY = cos(uTime * uRimWanderSpeed * 0.8) * uRimWanderJitter;
         vec3 wanderingNormal = normalize(normal + vec3(wanderX, wanderY, 0.0));
@@ -296,6 +297,9 @@ const GenAi = ({
 }) => {
   const materialRef = useRef();
   const [hovered, setHover] = useState(false);
+  
+  // Ref to track accumulated time (phase)
+  const phaseRef = useRef(0);
 
   // Memoize colors
   const uniforms = useMemo(() => ({
@@ -310,9 +314,11 @@ const GenAi = ({
     blobColorB: new THREE.Color("#0055ff"),
   }), []);
 
-  useFrame(({ clock }) => {
+  useFrame(({ clock }, delta) => {
     if (materialRef.current) {
       const mat = materialRef.current;
+      
+      // Still pass uTime for the Rim Wander (constant speed)
       mat.uTime = clock.getElapsedTime();
 
       // Smooth Hover Transition
@@ -322,12 +328,18 @@ const GenAi = ({
       // --- CRITICAL VISUAL SETTINGS ---
       
       // 1. Distortion: 
-      // Lerp from 0.0 (Smooth Sphere) -> 0.05 (Subtle Blob - Matches your sample)
       mat.uDistortion = THREE.MathUtils.lerp(0.0, 0.05, mat.uHover);
 
-      // 2. Speed: 
-      // Lerp from 0.7 (Default) -> 1.0 (Matches your sample)
-      mat.uSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
+      // 2. Speed Calculation:
+      // We calculate the current speed in JS...
+      const currentSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
+      
+      // ...and manually increment the phase.
+      // This prevents the jump because we add a small amount every frame
+      // instead of multiplying a large time value by a changing speed.
+      phaseRef.current += delta * currentSpeed;
+      
+      mat.uPhase = phaseRef.current;
     }
   });
 
@@ -339,6 +351,9 @@ const GenAi = ({
     >
       <unifiedFluidMaterial
         ref={materialRef}
+        
+        // Initialize uPhase
+        uPhase={0}
         
         // --- Static Props (State A) ---
         uIntensity={3.0}
