@@ -11,14 +11,14 @@ const UnifiedFluidMaterial = shaderMaterial(
   {
     // --- System Uniforms ---
     uTime: 0,
-    uHover: 0.0, // 0.0 = State A, 1.0 = State B
-    uPhase: 0,   // <--- NEW: Replaces uTime * uSpeed for movement
+    uHover: 0.0,
+    uPhase: 0,
 
-    // --- Dynamic Uniforms (Note: uSpeed is now handled in JS) ---
-    uDistortion: 0.0, // Lerps 0.0 -> 0.05 (Subtle blob)
-    uFrequency: 3.0,  // Static 3.0
+    // --- Dynamic Uniforms ---
+    uDistortion: 0.0, 
+    uFrequency: 3.0,
 
-    // --- STATE A: Distorted Sphere Settings (Exact) ---
+    // --- STATE A: Distorted Sphere Settings ---
     uIntensity: 3.0,
     uNoiseDensity: 5.0,
     uWarpStrength: 4.0,
@@ -26,21 +26,18 @@ const UnifiedFluidMaterial = shaderMaterial(
     uMinWidth: 0.1,
     uMaxWidth: 0.5,
     uVeinDefinition: 0.75,
-    
     uRimPower: 8.0,
     uRimStrength: 1.25,
     uInnerDarkness: 0.9,
     uRimColor: new THREE.Color("#8AAFFF"),
-    
     uRimWanderSpeed: 1.5,
     uRimWanderJitter: 0.3,
-    
     uColorA: new THREE.Color("#e048d7"),
     uColorB: new THREE.Color("#2a7ed5"),
     uColorC: new THREE.Color("#521554"),
     uColorD: new THREE.Color("#000000"),
 
-    // --- STATE B: Blob Settings (Exact) ---
+    // --- STATE B: Blob Settings ---
     uBlobColorA: new THREE.Color("#CA33C0"),
     uBlobColorB: new THREE.Color("#0055ff"),
   },
@@ -48,7 +45,7 @@ const UnifiedFluidMaterial = shaderMaterial(
   // VERTEX SHADER
   // ----------------------------------------------------------------
   `
-    uniform float uPhase; // Updated from uTime * uSpeed
+    uniform float uPhase;
     uniform float uFrequency;
     uniform float uDistortion;
 
@@ -110,7 +107,6 @@ const UnifiedFluidMaterial = shaderMaterial(
     }
 
     float getDisplacement(vec3 position) {
-        // USE PHASE INSTEAD OF TIME
         return snoise(vec3(position * uFrequency + uPhase));
     }
 
@@ -119,13 +115,15 @@ const UnifiedFluidMaterial = shaderMaterial(
         float noise = getDisplacement(position);
         vNoise = noise;
         
-        // Base displacement
         vec3 deformedPos = position + (normal * noise * uDistortion);
 
         // Finite Difference Normals
-        float epsilon = 0.01; 
-        vec3 tangent = normalize(cross(normal, vec3(0.0, 1.0, 0.0)));
-        if (length(tangent) < 0.001) tangent = normalize(cross(normal, vec3(0.0, 0.0, 1.0))); 
+        float epsilon = 0.001; // FIX: Reduced epsilon for higher precision
+        
+        // FIX: Biased Tangent Calculation
+        // By using (0.0, 1.0, 1.0) instead of (0,1,0), we ensure the vector
+        // never runs parallel to the pole normal (0,1,0), preventing the "Hole" artifact.
+        vec3 tangent = normalize(cross(normal, vec3(0.0, 1.0, 1.0))); 
         vec3 bitangent = normalize(cross(normal, tangent));
         
         vec3 neighborA = position + tangent * epsilon;
@@ -145,14 +143,12 @@ const UnifiedFluidMaterial = shaderMaterial(
     }
   `,
   // ----------------------------------------------------------------
-  // FRAGMENT SHADER
+  // FRAGMENT SHADER (Unchanged)
   // ----------------------------------------------------------------
   `
     uniform float uTime;
     uniform float uHover;
-    uniform float uPhase; // Updated from uTime * uSpeed
-    
-    // -- State A Uniforms --
+    uniform float uPhase;
     uniform float uIntensity;
     uniform float uNoiseDensity;
     uniform float uWarpStrength;
@@ -170,8 +166,6 @@ const UnifiedFluidMaterial = shaderMaterial(
     uniform vec3 uColorB;
     uniform vec3 uColorC;
     uniform vec3 uColorD;
-
-    // -- State B Uniforms --
     uniform vec3 uBlobColorA;
     uniform vec3 uBlobColorB;
     
@@ -180,7 +174,6 @@ const UnifiedFluidMaterial = shaderMaterial(
     varying vec3 vViewNormal;
     varying vec3 vViewPosition;
 
-    // --- Noise Functions ---
     float random (in vec2 st) { return fract(sin(dot(st.xy, vec2(12.9898,78.233))) * 43758.5453123); }
     float noise (in vec2 st) {
         vec2 i = floor(st);
@@ -203,72 +196,44 @@ const UnifiedFluidMaterial = shaderMaterial(
         return value;
     }
 
-    // --- Logic A: Distorted Sphere (Exact) ---
     vec3 getStateAColor(vec2 uv, vec3 viewDir, vec3 normal) {
-        // USE PHASE INSTEAD OF TIME * SPEED
         float moveTime = uPhase; 
-
-        // Fluid Pattern
         vec2 q = vec2(0.);
         q.x = fbm(uv + 0.5 * moveTime); 
         q.y = fbm(uv + vec2(1.0));
-
         vec2 r = vec2(0.);
         r.x = fbm(uv + uWarpStrength * q + vec2(1.7, 9.2) + 0.4 * moveTime);
         r.y = fbm(uv + uWarpStrength * q + vec2(8.3, 2.8) + 0.3 * moveTime);
-
         float f = fbm(uv + r);
-
-        // Fluid Colors
         vec3 color = mix(uColorA, uColorB, clamp((f*f)*4.0, 0.0, 1.0));
-        
-        // Veins
         float blackVeins = smoothstep(0.0, uVeinDefinition, abs(f - 0.5) * 3.0);
         color = mix(color, uColorD, blackVeins);
-
-        // Background
         color = mix(color, uColorC, clamp(length(q), 0.0, 1.0));
-        
-        // Glow
         float widthMap = smoothstep(0.0, 1.5, length(q)); 
         float currentWidth = mix(uMinWidth, uMaxWidth, widthMap);
         float sharpness = 1.0 / max(currentWidth, 0.001);
         float glowIntensity = pow(f, sharpness) * 4.0;
         vec3 fluidGlow = uColorA * glowIntensity;
-        
         vec3 finalColor = (color * uIntensity) + fluidGlow;
         finalColor *= smoothstep(uContrast - 0.4, uContrast + 0.4, f);
-
-        // Wandering Rim (Keeps uTime because wander speed is constant)
         float wanderX = sin(uTime * uRimWanderSpeed) * uRimWanderJitter;
         float wanderY = cos(uTime * uRimWanderSpeed * 0.8) * uRimWanderJitter;
         vec3 wanderingNormal = normalize(normal + vec3(wanderX, wanderY, 0.0));
         float fresnel = 1.0 - dot(viewDir, wanderingNormal);
-        
         finalColor *= clamp(mix(1.0 - uInnerDarkness, 1.0, fresnel), 0.0, 1.0);
         float rimParam = pow(fresnel, uRimPower);
         vec3 rimFinal = uRimColor * rimParam * uRimStrength;
-        
         return finalColor + rimFinal;
     }
 
-    // --- Logic B: Fluid Blob (Exact) ---
     vec3 getStateBColor(vec3 viewDir, vec3 normal) {
-        // Fresnel
         float fresnel = 1.0 - dot(viewDir, normal);
         fresnel = clamp(fresnel, 0.0, 1.0);
-        
-        // Sharper rim
         float rim = pow(fresnel, 2.5);
-
-        // Color blending via noise
         vec3 colorMix = mix(uBlobColorA, uBlobColorB, vNoise * 0.5 + 0.5);
-
-        // Composition
         vec3 finalColor = vec3(0.0);
-        finalColor += colorMix * rim * 3.0; // Rim Glow
-        finalColor += colorMix * 0.1;       // Ambient
-        
+        finalColor += colorMix * rim * 3.0; 
+        finalColor += colorMix * 0.1; 
         return finalColor;
     }
 
@@ -276,10 +241,8 @@ const UnifiedFluidMaterial = shaderMaterial(
         vec2 uv = vUv * uNoiseDensity;
         vec3 viewDir = normalize(vViewPosition);
         vec3 normal = normalize(vViewNormal);
-
         vec3 colorA = getStateAColor(uv, viewDir, normal);
         vec3 colorB = getStateBColor(viewDir, normal);
-
         gl_FragColor = vec4(mix(colorA, colorB, uHover), 1.0);
     }
   `
@@ -293,69 +256,64 @@ extend({ UnifiedFluidMaterial });
 
 const GenAi = ({ 
   radius = 1.5, 
-  segments = 128 
+  segments = 256 
 }) => {
   const materialRef = useRef();
+  const meshRef = useRef();
   const [hovered, setHover] = useState(false);
-  
-  // Ref to track accumulated time (phase)
   const phaseRef = useRef(0);
 
-  // Memoize colors
   const uniforms = useMemo(() => ({
-    // State A
     rimColor: new THREE.Color("#8AAFFF"),
     colorA: new THREE.Color("#e048d7"),
     colorB: new THREE.Color("#2a7ed5"),
     colorC: new THREE.Color("#521554"),
     colorD: new THREE.Color("#000000"),
-    // State B
     blobColorA: new THREE.Color("#CA33C0"),
     blobColorB: new THREE.Color("#0055ff"),
   }), []);
 
   useFrame(({ clock }, delta) => {
-    if (materialRef.current) {
+    if (materialRef.current && meshRef.current) {
       const mat = materialRef.current;
+      const mesh = meshRef.current;
       
-      // Still pass uTime for the Rim Wander (constant speed)
       mat.uTime = clock.getElapsedTime();
 
-      // Smooth Hover Transition
+      // Gentle Rotation
+      mesh.rotation.y += 0.002;
+      mesh.rotation.z += 0.001;
+
+      // Hover
       const target = hovered ? 1.0 : 0.0;
       mat.uHover = THREE.MathUtils.lerp(mat.uHover, target, 0.1);
+      if (Math.abs(mat.uHover - target) < 0.001) mat.uHover = target;
 
-      // --- CRITICAL VISUAL SETTINGS ---
-      
-      // 1. Distortion: 
-      mat.uDistortion = THREE.MathUtils.lerp(0.0, 0.05, mat.uHover);
-
-      // 2. Speed Calculation:
-      // We calculate the current speed in JS...
+      // Visuals
+      mat.uDistortion = THREE.MathUtils.lerp(0.01, 0.05, mat.uHover);
       const currentSpeed = THREE.MathUtils.lerp(0.7, 1.0, mat.uHover);
       
-      // ...and manually increment the phase.
-      // This prevents the jump because we add a small amount every frame
-      // instead of multiplying a large time value by a changing speed.
       phaseRef.current += delta * currentSpeed;
-      
       mat.uPhase = phaseRef.current;
     }
   });
 
   return (
     <Sphere 
+      ref={meshRef}
       args={[radius, segments, segments]}
       onPointerOver={() => setHover(true)}
       onPointerOut={() => setHover(false)}
+      // FIX 1: Disable frustum culling. 
+      // This forces Three.js to render the object even if the bounding box 
+      // suggests it is off-screen, fixing the clipped borders.
+      frustumCulled={false} 
     >
       <unifiedFluidMaterial
         ref={materialRef}
-        
-        // Initialize uPhase
         uPhase={0}
         
-        // --- Static Props (State A) ---
+        // --- Static Props ---
         uIntensity={3.0}
         uNoiseDensity={5.0}
         uWarpStrength={4.0}
@@ -363,7 +321,6 @@ const GenAi = ({
         uMinWidth={0.1}
         uMaxWidth={0.5}
         uVeinDefinition={0.75}
-        
         uRimPower={8.0}
         uRimStrength={1.25}
         uInnerDarkness={0.9}
@@ -376,7 +333,6 @@ const GenAi = ({
         uColorB={uniforms.colorB}
         uColorC={uniforms.colorC}
         uColorD={uniforms.colorD}
-        
         uBlobColorA={uniforms.blobColorA}
         uBlobColorB={uniforms.blobColorB}
       />
